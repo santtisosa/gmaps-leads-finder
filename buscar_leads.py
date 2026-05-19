@@ -191,6 +191,48 @@ def main():
     print(f"Exportado a: {args.output}")
     print(f"{'='*50}")
 
+    if leads:
+        exportar_mensajes(leads)
+
+
+def generar_mensaje(lead):
+    """Genera un mensaje de WhatsApp personalizado para un lead."""
+    nombre   = lead["nombre"]
+    categoria = lead["categoria"]
+    telefono  = lead["telefono"]
+
+    mensaje = (
+        f"Hola, vi que {nombre} todavía no tiene sitio web. "
+        f"Te puedo armar uno en menos de 14 días, con dominio incluido y sin letra chica. "
+        f"Antes de cualquier pago te mando una maqueta gratis para que veas cómo quedaría. "
+        f"¿Te interesa? — Santiago | santiagososa.dev"
+    )
+
+    # Link de WhatsApp listo para abrir (si hay teléfono)
+    numero_limpio = "".join(c for c in telefono if c.isdigit())
+    if numero_limpio:
+        from urllib.parse import quote
+        link = f"https://wa.me/{numero_limpio}?text={quote(mensaje)}"
+    else:
+        link = ""
+
+    return mensaje, link
+
+
+def exportar_mensajes(leads, output="mensajes.txt"):
+    """Exporta mensajes personalizados por cada lead a un archivo de texto."""
+    with open(output, "w", encoding="utf-8") as f:
+        for i, lead in enumerate(leads, 1):
+            mensaje, link = generar_mensaje(lead)
+            f.write(f"{'─'*60}\n")
+            f.write(f"[{i}] {lead['nombre']} — {lead['categoria']}\n")
+            f.write(f"Tel: {lead['telefono']}\n")
+            f.write(f"Mensaje:\n{mensaje}\n")
+            if link:
+                f.write(f"Link WA: {link}\n")
+            f.write("\n")
+    print(f"Mensajes exportados a: {output}")
+
 
 if __name__ == "__main__":
     main()
