@@ -7,6 +7,7 @@ Exporta resultados a leads.csv
 import os
 import csv
 import time
+import argparse
 import googlemaps
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -42,10 +43,10 @@ MAX_PAGES_PER_CATEGORIA = 3    # cada página = 20 resultados → max 60 por cat
 # ───────────────────────────────────────────────────────────────────────────
 
 
-def buscar_categoria(gmaps, categoria):
+def buscar_categoria(gmaps, categoria, ciudad=CIUDAD, max_paginas=MAX_PAGES_PER_CATEGORIA):
     """Devuelve lista de place_id para una categoría en la ciudad."""
     place_ids = []
-    query = f"{categoria} {CIUDAD}"
+    query = f"{categoria} {ciudad}"
     print(f"  Buscando: {query}")
 
     try:
@@ -55,7 +56,7 @@ def buscar_categoria(gmaps, categoria):
         return place_ids
 
     paginas = 0
-    while resp and paginas < MAX_PAGES_PER_CATEGORIA:
+    while resp and paginas < max_paginas:
         for place in resp.get("results", []):
             place_ids.append(place["place_id"])
 
@@ -99,20 +100,35 @@ def obtener_detalle(gmaps, place_id, reintentos=3):
     return None
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Busca negocios sin web en Google Maps")
+    parser.add_argument("--ciudad",   default=CIUDAD,              help="Ciudad a buscar (default: Montevideo, Uruguay)")
+    parser.add_argument("--output",   default=OUTPUT_FILE,          help="Archivo CSV de salida (default: leads.csv)")
+    parser.add_argument("--paginas",  default=MAX_PAGES_PER_CATEGORIA, type=int, help="Páginas por categoría (default: 3)")
+    parser.add_argument("--categorias", nargs="+", default=CATEGORIAS, help="Categorías a buscar")
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     if API_KEY == "TU_API_KEY_AQUI":
         print("ERROR: Configurá tu API key.")
         print("  export GOOGLE_MAPS_API_KEY='tu_key'")
-        print("  o editá la variable API_KEY en este archivo.")
+        print("  o creá un archivo .env con GOOGLE_MAPS_API_KEY=tu_key")
         return
 
     gmaps = googlemaps.Client(key=API_KEY)
     leads = []
-    vistos = set()   # evitar duplicados entre categorías
+    vistos = set()
 
-    for categoria in CATEGORIAS:
+    print(f"Ciudad: {args.ciudad}")
+    print(f"Categorías: {len(args.categorias)}")
+    print(f"Output: {args.output}\n")
+
+    for categoria in args.categorias:
         print(f"\n[{categoria.upper()}]")
-        place_ids = buscar_categoria(gmaps, categoria)
+        place_ids = buscar_categoria(gmaps, categoria, ciudad=args.ciudad, max_paginas=args.paginas)
         print(f"  Encontrados: {len(place_ids)} negocios")
 
         sin_web = 0
@@ -150,14 +166,14 @@ def main():
     fieldnames = ["nombre", "telefono", "direccion", "categoria",
                   "rating", "reseñas", "website", "contactado", "notas"]
 
-    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
+    with open(args.output, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(leads)
 
     print(f"\n{'='*50}")
     print(f"TOTAL LEADS: {len(leads)}")
-    print(f"Exportado a: {OUTPUT_FILE}")
+    print(f"Exportado a: {args.output}")
     print(f"{'='*50}")
 
 
