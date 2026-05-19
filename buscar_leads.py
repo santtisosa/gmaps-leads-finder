@@ -9,6 +9,7 @@ import csv
 import time
 import googlemaps
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 load_dotenv()  # carga .env automáticamente si existe
 
@@ -110,9 +111,8 @@ def main():
         print(f"  Encontrados: {len(place_ids)} negocios")
 
         sin_web = 0
-        for pid in place_ids:
-            if pid in vistos:
-                continue
+        nuevos = [p for p in place_ids if p not in vistos]
+        for pid in tqdm(nuevos, desc=f"  {categoria}", unit="neg", leave=False):
             vistos.add(pid)
 
             time.sleep(DELAY_BETWEEN_REQUESTS)
@@ -131,7 +131,7 @@ def main():
                     "rating":     detalle.get("rating", ""),
                     "reseñas":    detalle.get("user_ratings_total", ""),
                     "website":    "",
-                    "contactado": "",   # columna para marcar manualmente
+                    "contactado": "",
                     "notas":      "",
                 })
 
