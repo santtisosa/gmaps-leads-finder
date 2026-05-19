@@ -74,24 +74,29 @@ def buscar_categoria(gmaps, categoria):
     return place_ids
 
 
-def obtener_detalle(gmaps, place_id):
-    """Devuelve detalle del negocio o None si falla."""
-    try:
-        result = gmaps.place(
-            place_id,
-            fields=[
-                "name",
-                "website",
-                "formatted_phone_number",
-                "formatted_address",
-                "rating",
-                "user_ratings_total",
-            ],
-        )
-        return result.get("result", {})
-    except Exception as e:
-        print(f"  ERROR detalle {place_id}: {e}")
-        return None
+def obtener_detalle(gmaps, place_id, reintentos=3):
+    """Devuelve detalle del negocio. Reintenta con backoff exponencial."""
+    for intento in range(reintentos):
+        try:
+            result = gmaps.place(
+                place_id,
+                fields=[
+                    "name",
+                    "website",
+                    "formatted_phone_number",
+                    "formatted_address",
+                    "rating",
+                    "user_ratings_total",
+                ],
+            )
+            return result.get("result", {})
+        except Exception as e:
+            if intento < reintentos - 1:
+                espera = 2 ** intento   # 1s, 2s, 4s
+                time.sleep(espera)
+            else:
+                tqdm.write(f"  ERROR detalle {place_id}: {e}")
+    return None
 
 
 def main():
