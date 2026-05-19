@@ -15,16 +15,16 @@ Uso:
 import csv
 import time
 import argparse
-import tempfile
 import re
 import os
+import openpyxl
 import pywhatkit as kit
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ── CONFIG ──────────────────────────────────────────────────────────────────
-CSV_FILE   = "leads.csv"
+CSV_FILE   = "leads.xlsx"
 DELAY_SEG  = 25     # segundos entre mensajes (no spamear)
 LIMITE     = None   # None = todos, o un número para probar (ej: 5)
 WAIT_TIME  = 15     # segundos que espera antes de enviar (para que cargue WA Web)
@@ -65,35 +65,42 @@ def parse_args():
     return parser.parse_args()
 
 
-def cargar_leads(csv_path):
-    """Lee el CSV y devuelve leads con teléfono no contactados."""
+def cargar_leads(xlsx_path):
+    """Lee el Excel y devuelve leads con teléfono no contactados."""
+    wb = openpyxl.load_workbook(xlsx_path)
+    ws = wb.active
+    headers = [str(c.value).strip().lower() if c.value else "" for c in ws[1]]
     leads = []
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            if row.get("contactado", "").strip():
-                continue   # ya fue contactado
-            if not row.get("telefono", "").strip():
-                continue   # sin teléfono
-            leads.append(row)
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        data = dict(zip(headers, row))
+        if data.get("contactado", "") and str(data["contactado"]).strip():
+            continue
+        if not data.get("teléfono", "") and not data.get("telefono", ""):
+            continue
+        # normalizar clave telefono
+        data["telefono"] = data.get("teléfono") or data.get("telefono") or ""
+        data["nombre"]   = data.get("nombre", "")
+        leads.append(data)
     return leads
 
 
-def marcar_contactado(csv_path, nombre):
-    """Marca un lead como contactado en el CSV."""
-    rows = []
-    fieldnames = []
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        fieldnames = reader.fieldnames
-        for row in reader:
-            if row["nombre"] == nombre:
-                row["contactado"] = "✓"
-            rows.append(row)
-
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+def marcar_contactado(xlsx_path, nombre):
+    """Marca un lead como contactado en el Excel."""
+    wb = openpyxl.load_workbook(xlsx_path)
+    ws = wb.active
+    headers = [str(c.value).strip().lower() if c.value else "" for c in ws[1]]
+    contactado_col = None
+    nombre_col     = None
+    for i, h in enumerate(headers, 1):
+        if h in ("contactado",):   contactado_col = i
+        if h == "nombre":          nombre_col = i
+    if not contactado_col or not nombre_col:
+        return
+    for row in ws.iter_rows(min_row=2):
+        if str(row[nombre_col - 1].value).strip() == nombre:
+            row[contactado_col - 1].value = "✓"
+            break
+    wb.save(xlsx_path)
 
 
 def main():

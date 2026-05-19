@@ -9,6 +9,9 @@ import csv
 import time
 import json
 import argparse
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 import googlemaps
 from datetime import datetime
 from dotenv import load_dotenv
@@ -39,7 +42,7 @@ CATEGORIAS = [
     "farmacia",
 ]
 
-OUTPUT_FILE = "leads.csv"
+OUTPUT_FILE = "leads.xlsx"
 DELAY_BETWEEN_REQUESTS = 0.2   # segundos entre llamadas API
 MAX_PAGES_PER_CATEGORIA = 3    # cada página = 20 resultados → max 60 por categoría
 MIN_RESENAS = 5                # mínimo de reseñas para considerar el negocio (filtra negocios fantasma)
@@ -190,6 +193,68 @@ def obtener_detalle(gmaps, place_id, tracker, reintentos=3):
     return None
 
 
+def exportar_excel(leads, path):
+    """Exporta leads a .xlsx con formato prolijo. Append si ya existe."""
+    HEADERS = ["Nombre", "Teléfono", "Dirección", "Categoría",
+               "Rating", "Reseñas", "Contactado", "Notas"]
+    KEYS    = ["nombre", "telefono", "direccion", "categoria",
+               "rating", "reseñas", "contactado", "notas"]
+
+    # Cargar workbook existente o crear uno nuevo
+    if os.path.exists(path):
+        wb = openpyxl.load_workbook(path)
+        ws = wb.active
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Leads"
+
+        # ── Encabezados ──────────────────────────────────────────────────
+        header_fill   = PatternFill("solid", fgColor="1400FF")
+        header_font   = Font(bold=True, color="FFFFFF", size=11)
+        header_align  = Alignment(horizontal="center", vertical="center")
+        thin_border   = Border(
+            bottom=Side(style="thin", color="DDDDDD"),
+            right=Side(style="thin",  color="DDDDDD"),
+        )
+
+        for col, h in enumerate(HEADERS, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font      = header_font
+            cell.fill      = header_fill
+            cell.alignment = header_align
+            cell.border    = thin_border
+
+        ws.row_dimensions[1].height = 28
+
+    # ── Filas de datos ───────────────────────────────────────────────────
+    row_fill_alt  = PatternFill("solid", fgColor="F5F5F5")
+    data_font     = Font(size=10)
+    data_align    = Alignment(vertical="center", wrap_text=False)
+
+    start_row = ws.max_row + 1 if ws.max_row > 1 else 2
+
+    for i, lead in enumerate(leads):
+        r = start_row + i
+        fill = row_fill_alt if i % 2 == 0 else PatternFill()
+        for col, key in enumerate(KEYS, 1):
+            cell = ws.cell(row=r, column=col, value=lead.get(key, ""))
+            cell.font      = data_font
+            cell.alignment = data_align
+            cell.fill      = fill
+        ws.row_dimensions[r].height = 20
+
+    # ── Anchos de columna ────────────────────────────────────────────────
+    col_widths = [35, 18, 50, 18, 8, 10, 14, 30]
+    for col, width in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(col)].width = width
+
+    # Freeze header row
+    ws.freeze_panes = "A2"
+
+    wb.save(path)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Busca negocios sin web en Google Maps")
     parser.add_argument("--ciudad",   default=CIUDAD,              help="Ciudad a buscar (default: Montevideo, Uruguay)")
@@ -217,10 +282,19 @@ def main():
     # Cargar nombres ya guardados para no duplicar entre corridas
     nombres_existentes = set()
     if os.path.exists(args.output):
-        with open(args.output, newline="", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                nombres_existentes.add(row.get("nombre", "").strip().lower())
-        print(f"Leads existentes en {args.output}: {len(nombres_existentes)} (se saltarán duplicados)")
+        try:
+            wb_exist = openpyxl.load_workbook(args.output)
+            ws_exist = wb_exist.active
+            headers  = [c.value for c in ws_exist[1]]
+            if "nombre" in headers:
+                col_idx = headers.index("nombre") + 1
+                for row in ws_exist.iter_rows(min_row=2, values_only=True):
+                    val = row[col_idx - 1]
+                    if val:
+                        nombres_existentes.add(str(val).strip().lower())
+            print(f"Leads existentes en {args.output}: {len(nombres_existentes)} (se saltarán duplicados)")
+        except Exception:
+            pass
 
     print(f"Ciudad: {args.ciudad}")
     print(f"Categorías: {len(args.categorias)}")
@@ -261,20 +335,12 @@ def main():
 
         print(f"  Sin web: {sin_web}")
 
-    # ── EXPORTAR CSV ────────────────────────────────────────────────────────
+    # ── EXPORTAR EXCEL ──────────────────────────────────────────────────────
     if not leads:
         print("\nNo se encontraron leads.")
         return
 
-    fieldnames = ["nombre", "telefono", "direccion", "categoria",
-                  "rating", "reseñas", "website", "contactado", "notas"]
-
-    with open(args.output, "a", newline="", encoding="utf-8") as f:
-        # "a" = append: si el archivo existe agrega, si no lo crea
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if f.tell() == 0:
-            writer.writeheader()   # solo escribe header si el archivo está vacío
-        writer.writerows(leads)
+    exportar_excel(leads, args.output)
 
     print(f"\n{'='*50}")
     print(f"TOTAL LEADS: {len(leads)}")
