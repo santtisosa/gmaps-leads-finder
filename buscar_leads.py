@@ -122,6 +122,14 @@ def main():
     leads = []
     vistos = set()
 
+    # Cargar nombres ya guardados para no duplicar entre corridas
+    nombres_existentes = set()
+    if os.path.exists(args.output):
+        with open(args.output, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                nombres_existentes.add(row.get("nombre", "").strip().lower())
+        print(f"Leads existentes en {args.output}: {len(nombres_existentes)} (se saltarán duplicados)")
+
     print(f"Ciudad: {args.ciudad}")
     print(f"Categorías: {len(args.categorias)}")
     print(f"Output: {args.output}\n")
@@ -142,10 +150,12 @@ def main():
                 continue
 
             # Sin website = lead potencial
-            if not detalle.get("website"):
+            nombre = detalle.get("name", "")
+            if not detalle.get("website") and nombre.strip().lower() not in nombres_existentes:
                 sin_web += 1
+                nombres_existentes.add(nombre.strip().lower())
                 leads.append({
-                    "nombre":     detalle.get("name", ""),
+                    "nombre":     nombre,
                     "telefono":   detalle.get("formatted_phone_number", ""),
                     "direccion":  detalle.get("formatted_address", ""),
                     "categoria":  categoria,
@@ -166,9 +176,11 @@ def main():
     fieldnames = ["nombre", "telefono", "direccion", "categoria",
                   "rating", "reseñas", "website", "contactado", "notas"]
 
-    with open(args.output, "w", newline="", encoding="utf-8") as f:
+    with open(args.output, "a", newline="", encoding="utf-8") as f:
+        # "a" = append: si el archivo existe agrega, si no lo crea
         writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
+        if f.tell() == 0:
+            writer.writeheader()   # solo escribe header si el archivo está vacío
         writer.writerows(leads)
 
     print(f"\n{'='*50}")
