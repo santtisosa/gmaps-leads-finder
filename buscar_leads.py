@@ -40,6 +40,7 @@ CATEGORIAS = [
 OUTPUT_FILE = "leads.csv"
 DELAY_BETWEEN_REQUESTS = 0.2   # segundos entre llamadas API
 MAX_PAGES_PER_CATEGORIA = 3    # cada página = 20 resultados → max 60 por categoría
+MIN_RESENAS = 5                # mínimo de reseñas para considerar el negocio (filtra negocios fantasma)
 # ───────────────────────────────────────────────────────────────────────────
 
 
@@ -106,6 +107,7 @@ def parse_args():
     parser.add_argument("--output",   default=OUTPUT_FILE,          help="Archivo CSV de salida (default: leads.csv)")
     parser.add_argument("--paginas",  default=MAX_PAGES_PER_CATEGORIA, type=int, help="Páginas por categoría (default: 3)")
     parser.add_argument("--categorias", nargs="+", default=CATEGORIAS, help="Categorías a buscar")
+    parser.add_argument("--min-resenas", default=MIN_RESENAS, type=int, help="Mínimo de reseñas para incluir un negocio (default: 5)")
     return parser.parse_args()
 
 
@@ -151,7 +153,8 @@ def main():
 
             # Sin website = lead potencial
             nombre = detalle.get("name", "")
-            if not detalle.get("website") and nombre.strip().lower() not in nombres_existentes:
+            resenas = detalle.get("user_ratings_total") or 0
+            if not detalle.get("website") and resenas >= args.min_resenas and nombre.strip().lower() not in nombres_existentes:
                 sin_web += 1
                 nombres_existentes.add(nombre.strip().lower())
                 leads.append({
