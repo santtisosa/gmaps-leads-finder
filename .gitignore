@@ -4,4 +4,6 @@ __pycache__/
 .env
 leads.csv
 *.csv
+costos.json
+mensajes.txt
 .DS_Store

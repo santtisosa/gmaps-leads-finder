@@ -7,8 +7,10 @@ Exporta resultados a leads.csv
 import os
 import csv
 import time
+import json
 import argparse
 import googlemaps
+from datetime import datetime
 from dotenv import load_dotenv
 from tqdm import tqdm
 
@@ -41,10 +43,94 @@ OUTPUT_FILE = "leads.csv"
 DELAY_BETWEEN_REQUESTS = 0.2   # segundos entre llamadas API
 MAX_PAGES_PER_CATEGORIA = 3    # cada página = 20 resultados → max 60 por categoría
 MIN_RESENAS = 5                # mínimo de reseñas para considerar el negocio (filtra negocios fantasma)
+COSTS_FILE = "costos.json"
+
+# Precios Google Maps Places API (USD)
+PRECIO_TEXT_SEARCH   = 0.032   # por llamada a places()
+PRECIO_PLACE_DETAIL  = 0.017   # por llamada a place()
+CREDITO_MENSUAL      = 200.00  # crédito gratis de Google por mes
 # ───────────────────────────────────────────────────────────────────────────
 
 
-def buscar_categoria(gmaps, categoria, ciudad=CIUDAD, max_paginas=MAX_PAGES_PER_CATEGORIA):
+# ── COST TRACKER ────────────────────────────────────────────────────────────
+class CostTracker:
+    def __init__(self, path=COSTS_FILE):
+        self.path = path
+        self.mes_actual = datetime.now().strftime("%Y-%m")
+        self.data = self._cargar()
+        self.calls_text_search  = 0
+        self.calls_place_detail = 0
+
+    def _cargar(self):
+        if os.path.exists(self.path):
+            with open(self.path, encoding="utf-8") as f:
+                data = json.load(f)
+            # Resetear si cambió el mes
+            if data.get("mes") != self.mes_actual:
+                print(f"  Nuevo mes ({self.mes_actual}). Reseteando contador mensual.")
+                return self._nuevo_mes()
+            return data
+        return self._nuevo_mes()
+
+    def _nuevo_mes(self):
+        return {
+            "mes": self.mes_actual,
+            "total_text_search":  0,
+            "total_place_detail": 0,
+            "costo_total_usd":    0.0,
+            "corridas": [],
+        }
+
+    def registrar_text_search(self, n=1):
+        self.calls_text_search += n
+
+    def registrar_place_detail(self, n=1):
+        self.calls_place_detail += n
+
+    def costo_esta_corrida(self):
+        return (
+            self.calls_text_search  * PRECIO_TEXT_SEARCH +
+            self.calls_place_detail * PRECIO_PLACE_DETAIL
+        )
+
+    def guardar(self, leads_encontrados):
+        costo_corrida = self.costo_esta_corrida()
+        self.data["total_text_search"]  += self.calls_text_search
+        self.data["total_place_detail"] += self.calls_place_detail
+        self.data["costo_total_usd"]    = round(
+            self.data["costo_total_usd"] + costo_corrida, 4
+        )
+        self.data["corridas"].append({
+            "fecha":         datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "text_searches": self.calls_text_search,
+            "place_details": self.calls_place_detail,
+            "costo_usd":     round(costo_corrida, 4),
+            "leads":         leads_encontrados,
+        })
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, indent=2, ensure_ascii=False)
+
+    def imprimir_resumen(self):
+        costo_corrida  = self.costo_esta_corrida()
+        costo_mensual  = self.data["costo_total_usd"] + costo_corrida
+        restante       = max(0, CREDITO_MENSUAL - costo_mensual)
+        pct_usado      = (costo_mensual / CREDITO_MENSUAL) * 100
+
+        print(f"\n{'─'*50}")
+        print(f"  COSTOS API — {self.mes_actual}")
+        print(f"{'─'*50}")
+        print(f"  Esta corrida:")
+        print(f"    Text searches : {self.calls_text_search:>4}  × ${PRECIO_TEXT_SEARCH} = ${self.calls_text_search * PRECIO_TEXT_SEARCH:.3f}")
+        print(f"    Place details : {self.calls_place_detail:>4}  × ${PRECIO_PLACE_DETAIL} = ${self.calls_place_detail * PRECIO_PLACE_DETAIL:.3f}")
+        print(f"    Subtotal      : ${costo_corrida:.4f}")
+        print(f"  Acumulado mes  : ${costo_mensual:.4f} / ${CREDITO_MENSUAL:.2f} ({pct_usado:.1f}%)")
+        print(f"  Crédito restante: ${restante:.4f}")
+        print(f"  Historial guardado en: {self.path}")
+        print(f"{'─'*50}")
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def buscar_categoria(gmaps, categoria, tracker, ciudad=CIUDAD, max_paginas=MAX_PAGES_PER_CATEGORIA):
     """Devuelve lista de place_id para una categoría en la ciudad."""
     place_ids = []
     query = f"{categoria} {ciudad}"
@@ -52,6 +138,7 @@ def buscar_categoria(gmaps, categoria, ciudad=CIUDAD, max_paginas=MAX_PAGES_PER_
 
     try:
         resp = gmaps.places(query=query)
+        tracker.registrar_text_search()
     except Exception as e:
         print(f"  ERROR en búsqueda: {e}")
         return place_ids
@@ -69,6 +156,7 @@ def buscar_categoria(gmaps, categoria, ciudad=CIUDAD, max_paginas=MAX_PAGES_PER_
         time.sleep(2)  # Google requiere ~2s antes de usar next_page_token
         try:
             resp = gmaps.places(query=query, page_token=next_token)
+            tracker.registrar_text_search()
         except Exception as e:
             print(f"  ERROR paginación: {e}")
             break
@@ -76,7 +164,7 @@ def buscar_categoria(gmaps, categoria, ciudad=CIUDAD, max_paginas=MAX_PAGES_PER_
     return place_ids
 
 
-def obtener_detalle(gmaps, place_id, reintentos=3):
+def obtener_detalle(gmaps, place_id, tracker, reintentos=3):
     """Devuelve detalle del negocio. Reintenta con backoff exponencial."""
     for intento in range(reintentos):
         try:
@@ -91,10 +179,11 @@ def obtener_detalle(gmaps, place_id, reintentos=3):
                     "user_ratings_total",
                 ],
             )
+            tracker.registrar_place_detail()
             return result.get("result", {})
         except Exception as e:
             if intento < reintentos - 1:
-                espera = 2 ** intento   # 1s, 2s, 4s
+                espera = 2 ** intento
                 time.sleep(espera)
             else:
                 tqdm.write(f"  ERROR detalle {place_id}: {e}")
@@ -120,9 +209,10 @@ def main():
         print("  o creá un archivo .env con GOOGLE_MAPS_API_KEY=tu_key")
         return
 
-    gmaps = googlemaps.Client(key=API_KEY)
-    leads = []
-    vistos = set()
+    gmaps   = googlemaps.Client(key=API_KEY)
+    tracker = CostTracker()
+    leads   = []
+    vistos  = set()
 
     # Cargar nombres ya guardados para no duplicar entre corridas
     nombres_existentes = set()
@@ -138,7 +228,7 @@ def main():
 
     for categoria in args.categorias:
         print(f"\n[{categoria.upper()}]")
-        place_ids = buscar_categoria(gmaps, categoria, ciudad=args.ciudad, max_paginas=args.paginas)
+        place_ids = buscar_categoria(gmaps, categoria, tracker, ciudad=args.ciudad, max_paginas=args.paginas)
         print(f"  Encontrados: {len(place_ids)} negocios")
 
         sin_web = 0
@@ -147,7 +237,7 @@ def main():
             vistos.add(pid)
 
             time.sleep(DELAY_BETWEEN_REQUESTS)
-            detalle = obtener_detalle(gmaps, pid)
+            detalle = obtener_detalle(gmaps, pid, tracker)
             if not detalle:
                 continue
 
@@ -190,6 +280,9 @@ def main():
     print(f"TOTAL LEADS: {len(leads)}")
     print(f"Exportado a: {args.output}")
     print(f"{'='*50}")
+
+    tracker.imprimir_resumen()
+    tracker.guardar(len(leads))
 
     if leads:
         exportar_mensajes(leads)
