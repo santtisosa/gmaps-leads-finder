@@ -8,6 +8,9 @@ import os
 import csv
 import time
 import googlemaps
+from dotenv import load_dotenv
+
+load_dotenv()  # carga .env automáticamente si existe
 
 # ── CONFIG ─────────────────────────────────────────────────────────────────
 API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "TU_API_KEY_AQUI")
