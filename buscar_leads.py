@@ -1,7 +1,7 @@
 """
 buscar_leads.py
 Busca negocios en Montevideo sin sitio web usando Google Maps Places API.
-Exporta resultados a leads.csv
+Exporta resultados a leads.xlsx
 """
 
 import os
@@ -16,8 +16,11 @@ import googlemaps
 from datetime import datetime
 from dotenv import load_dotenv
 from tqdm import tqdm
+from log_config import setup_logging
 
-load_dotenv()  # carga .env automáticamente si existe
+load_dotenv()
+
+log = setup_logging("buscar_leads")
 
 # ── CONFIG ─────────────────────────────────────────────────────────────────
 API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "TU_API_KEY_AQUI")
@@ -43,15 +46,14 @@ CATEGORIAS = [
 ]
 
 OUTPUT_FILE = "leads.xlsx"
-DELAY_BETWEEN_REQUESTS = 0.2   # segundos entre llamadas API
-MAX_PAGES_PER_CATEGORIA = 3    # cada página = 20 resultados → max 60 por categoría
-MIN_RESENAS = 5                # mínimo de reseñas para considerar el negocio (filtra negocios fantasma)
+DELAY_BETWEEN_REQUESTS = 0.2
+MAX_PAGES_PER_CATEGORIA = 3
+MIN_RESENAS = 5
 COSTS_FILE = "costos.json"
 
-# Precios Google Maps Places API (USD)
-PRECIO_TEXT_SEARCH   = 0.032   # por llamada a places()
-PRECIO_PLACE_DETAIL  = 0.017   # por llamada a place()
-CREDITO_MENSUAL      = 200.00  # crédito gratis de Google por mes
+PRECIO_TEXT_SEARCH   = 0.032
+PRECIO_PLACE_DETAIL  = 0.017
+CREDITO_MENSUAL      = 200.00
 # ───────────────────────────────────────────────────────────────────────────
 
 
@@ -68,9 +70,8 @@ class CostTracker:
         if os.path.exists(self.path):
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
-            # Resetear si cambió el mes
             if data.get("mes") != self.mes_actual:
-                print(f"  Nuevo mes ({self.mes_actual}). Reseteando contador mensual.")
+                log.info(f"  Nuevo mes ({self.mes_actual}). Reseteando contador mensual.")
                 return self._nuevo_mes()
             return data
         return self._nuevo_mes()
@@ -112,6 +113,7 @@ class CostTracker:
         })
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=2, ensure_ascii=False)
+        log.debug(f"Costos guardados en {self.path}")
 
     def imprimir_resumen(self):
         costo_corrida  = self.costo_esta_corrida()
@@ -119,17 +121,17 @@ class CostTracker:
         restante       = max(0, CREDITO_MENSUAL - costo_mensual)
         pct_usado      = (costo_mensual / CREDITO_MENSUAL) * 100
 
-        print(f"\n{'─'*50}")
-        print(f"  COSTOS API — {self.mes_actual}")
-        print(f"{'─'*50}")
-        print(f"  Esta corrida:")
-        print(f"    Text searches : {self.calls_text_search:>4}  × ${PRECIO_TEXT_SEARCH} = ${self.calls_text_search * PRECIO_TEXT_SEARCH:.3f}")
-        print(f"    Place details : {self.calls_place_detail:>4}  × ${PRECIO_PLACE_DETAIL} = ${self.calls_place_detail * PRECIO_PLACE_DETAIL:.3f}")
-        print(f"    Subtotal      : ${costo_corrida:.4f}")
-        print(f"  Acumulado mes  : ${costo_mensual:.4f} / ${CREDITO_MENSUAL:.2f} ({pct_usado:.1f}%)")
-        print(f"  Crédito restante: ${restante:.4f}")
-        print(f"  Historial guardado en: {self.path}")
-        print(f"{'─'*50}")
+        log.info(f"\n{'─'*50}")
+        log.info(f"  COSTOS API — {self.mes_actual}")
+        log.info(f"{'─'*50}")
+        log.info(f"  Esta corrida:")
+        log.info(f"    Text searches : {self.calls_text_search:>4}  × ${PRECIO_TEXT_SEARCH} = ${self.calls_text_search * PRECIO_TEXT_SEARCH:.3f}")
+        log.info(f"    Place details : {self.calls_place_detail:>4}  × ${PRECIO_PLACE_DETAIL} = ${self.calls_place_detail * PRECIO_PLACE_DETAIL:.3f}")
+        log.info(f"    Subtotal      : ${costo_corrida:.4f}")
+        log.info(f"  Acumulado mes  : ${costo_mensual:.4f} / ${CREDITO_MENSUAL:.2f} ({pct_usado:.1f}%)")
+        log.info(f"  Crédito restante: ${restante:.4f}")
+        log.info(f"  Historial guardado en: {self.path}")
+        log.info(f"{'─'*50}")
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -137,13 +139,14 @@ def buscar_categoria(gmaps, categoria, tracker, ciudad=CIUDAD, max_paginas=MAX_P
     """Devuelve lista de place_id para una categoría en la ciudad."""
     place_ids = []
     query = f"{categoria} {ciudad}"
-    print(f"  Buscando: {query}")
+    log.info(f"  Buscando: {query}")
 
     try:
         resp = gmaps.places(query=query)
         tracker.registrar_text_search()
+        log.debug(f"Text search OK: {query}")
     except Exception as e:
-        print(f"  ERROR en búsqueda: {e}")
+        log.error(f"ERROR en búsqueda '{query}': {e}")
         return place_ids
 
     paginas = 0
@@ -156,12 +159,13 @@ def buscar_categoria(gmaps, categoria, tracker, ciudad=CIUDAD, max_paginas=MAX_P
         if not next_token:
             break
 
-        time.sleep(2)  # Google requiere ~2s antes de usar next_page_token
+        time.sleep(2)
         try:
             resp = gmaps.places(query=query, page_token=next_token)
             tracker.registrar_text_search()
+            log.debug(f"Página {paginas + 1} para '{query}'")
         except Exception as e:
-            print(f"  ERROR paginación: {e}")
+            log.error(f"ERROR paginación '{query}': {e}")
             break
 
     return place_ids
@@ -183,13 +187,15 @@ def obtener_detalle(gmaps, place_id, tracker, reintentos=3):
                 ],
             )
             tracker.registrar_place_detail()
+            log.debug(f"Place detail OK: {place_id}")
             return result.get("result", {})
         except Exception as e:
             if intento < reintentos - 1:
                 espera = 2 ** intento
+                log.warning(f"Reintento {intento + 1} para {place_id}: {e} (esperando {espera}s)")
                 time.sleep(espera)
             else:
-                tqdm.write(f"  ERROR detalle {place_id}: {e}")
+                log.error(f"ERROR detalle {place_id} tras {reintentos} intentos: {e}")
     return None
 
 
@@ -200,7 +206,6 @@ def exportar_excel(leads, path):
     KEYS    = ["nombre", "telefono", "direccion", "categoria",
                "rating", "reseñas", "contactado", "notas"]
 
-    # Cargar workbook existente o crear uno nuevo
     if os.path.exists(path):
         wb = openpyxl.load_workbook(path)
         ws = wb.active
@@ -209,7 +214,6 @@ def exportar_excel(leads, path):
         ws = wb.active
         ws.title = "Leads"
 
-        # ── Encabezados ──────────────────────────────────────────────────
         header_fill   = PatternFill("solid", fgColor="1400FF")
         header_font   = Font(bold=True, color="FFFFFF", size=11)
         header_align  = Alignment(horizontal="center", vertical="center")
@@ -227,7 +231,6 @@ def exportar_excel(leads, path):
 
         ws.row_dimensions[1].height = 28
 
-    # ── Filas de datos ───────────────────────────────────────────────────
     row_fill_alt  = PatternFill("solid", fgColor="F5F5F5")
     data_font     = Font(size=10)
     data_align    = Alignment(vertical="center", wrap_text=False)
@@ -244,34 +247,34 @@ def exportar_excel(leads, path):
             cell.fill      = fill
         ws.row_dimensions[r].height = 20
 
-    # ── Anchos de columna ────────────────────────────────────────────────
     col_widths = [35, 18, 50, 18, 8, 10, 14, 30]
     for col, width in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(col)].width = width
 
-    # Freeze header row
     ws.freeze_panes = "A2"
-
     wb.save(path)
+    log.debug(f"Excel guardado: {path} ({len(leads)} leads nuevos)")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Busca negocios sin web en Google Maps")
-    parser.add_argument("--ciudad",   default=CIUDAD,              help="Ciudad a buscar (default: Montevideo, Uruguay)")
-    parser.add_argument("--output",   default=OUTPUT_FILE,          help="Archivo CSV de salida (default: leads.csv)")
-    parser.add_argument("--paginas",  default=MAX_PAGES_PER_CATEGORIA, type=int, help="Páginas por categoría (default: 3)")
-    parser.add_argument("--categorias", nargs="+", default=CATEGORIAS, help="Categorías a buscar")
-    parser.add_argument("--min-resenas", default=MIN_RESENAS, type=int, help="Mínimo de reseñas para incluir un negocio (default: 5)")
+    parser.add_argument("--ciudad",      default=CIUDAD,                   help="Ciudad a buscar (default: Montevideo, Uruguay)")
+    parser.add_argument("--output",      default=OUTPUT_FILE,              help="Archivo CSV de salida (default: leads.csv)")
+    parser.add_argument("--paginas",     default=MAX_PAGES_PER_CATEGORIA,  type=int, help="Páginas por categoría (default: 3)")
+    parser.add_argument("--categorias",  nargs="+", default=CATEGORIAS,    help="Categorías a buscar")
+    parser.add_argument("--min-resenas", default=MIN_RESENAS,              type=int, help="Mínimo de reseñas para incluir un negocio (default: 5)")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
+    log.info(f"Iniciando búsqueda — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
     if API_KEY == "TU_API_KEY_AQUI":
-        print("ERROR: Configurá tu API key.")
-        print("  export GOOGLE_MAPS_API_KEY='tu_key'")
-        print("  o creá un archivo .env con GOOGLE_MAPS_API_KEY=tu_key")
+        log.error("API key no configurada.")
+        log.error("  export GOOGLE_MAPS_API_KEY='tu_key'")
+        log.error("  o creá un archivo .env con GOOGLE_MAPS_API_KEY=tu_key")
         return
 
     gmaps   = googlemaps.Client(key=API_KEY)
@@ -279,7 +282,6 @@ def main():
     leads   = []
     vistos  = set()
 
-    # Cargar nombres ya guardados para no duplicar entre corridas
     nombres_existentes = set()
     if os.path.exists(args.output):
         try:
@@ -292,18 +294,18 @@ def main():
                     val = row[col_idx - 1]
                     if val:
                         nombres_existentes.add(str(val).strip().lower())
-            print(f"Leads existentes en {args.output}: {len(nombres_existentes)} (se saltarán duplicados)")
-        except Exception:
-            pass
+            log.info(f"Leads existentes en {args.output}: {len(nombres_existentes)} (se saltarán duplicados)")
+        except Exception as e:
+            log.warning(f"No se pudo leer {args.output}: {e}")
 
-    print(f"Ciudad: {args.ciudad}")
-    print(f"Categorías: {len(args.categorias)}")
-    print(f"Output: {args.output}\n")
+    log.info(f"Ciudad: {args.ciudad}")
+    log.info(f"Categorías: {len(args.categorias)}")
+    log.info(f"Output: {args.output}\n")
 
     for categoria in args.categorias:
-        print(f"\n[{categoria.upper()}]")
+        log.info(f"\n[{categoria.upper()}]")
         place_ids = buscar_categoria(gmaps, categoria, tracker, ciudad=args.ciudad, max_paginas=args.paginas)
-        print(f"  Encontrados: {len(place_ids)} negocios")
+        log.info(f"  Encontrados: {len(place_ids)} negocios")
 
         sin_web = 0
         nuevos = [p for p in place_ids if p not in vistos]
@@ -315,7 +317,6 @@ def main():
             if not detalle:
                 continue
 
-            # Sin website = lead potencial
             nombre = detalle.get("name", "")
             resenas = detalle.get("user_ratings_total") or 0
             if not detalle.get("website") and resenas >= args.min_resenas and nombre.strip().lower() not in nombres_existentes:
@@ -332,20 +333,20 @@ def main():
                     "contactado": "",
                     "notas":      "",
                 })
+                log.debug(f"  Lead: {nombre} ({detalle.get('formatted_phone_number', 'sin tel')})")
 
-        print(f"  Sin web: {sin_web}")
+        log.info(f"  Sin web: {sin_web}")
 
-    # ── EXPORTAR EXCEL ──────────────────────────────────────────────────────
     if not leads:
-        print("\nNo se encontraron leads.")
+        log.info("\nNo se encontraron leads.")
         return
 
     exportar_excel(leads, args.output)
 
-    print(f"\n{'='*50}")
-    print(f"TOTAL LEADS: {len(leads)}")
-    print(f"Exportado a: {args.output}")
-    print(f"{'='*50}")
+    log.info(f"\n{'='*50}")
+    log.info(f"TOTAL LEADS: {len(leads)}")
+    log.info(f"Exportado a: {args.output}")
+    log.info(f"{'='*50}")
 
     tracker.imprimir_resumen()
     tracker.guardar(len(leads))
@@ -353,12 +354,13 @@ def main():
     if leads:
         exportar_mensajes(leads)
 
+    log.info(f"Búsqueda finalizada — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 def generar_mensaje(lead):
     """Genera un mensaje de WhatsApp personalizado para un lead."""
     nombre   = lead["nombre"]
-    categoria = lead["categoria"]
-    telefono  = lead["telefono"]
+    telefono = lead["telefono"]
 
     mensaje = (
         f"Hola, vi que {nombre} todavía no tiene sitio web. "
@@ -367,7 +369,6 @@ def generar_mensaje(lead):
         f"¿Te interesa? — Santiago | santiagososa.dev"
     )
 
-    # Link de WhatsApp listo para abrir (si hay teléfono)
     numero_limpio = "".join(c for c in telefono if c.isdigit())
     if numero_limpio:
         from urllib.parse import quote
@@ -390,7 +391,7 @@ def exportar_mensajes(leads, output="mensajes.txt"):
             if link:
                 f.write(f"Link WA: {link}\n")
             f.write("\n")
-    print(f"Mensajes exportados a: {output}")
+    log.info(f"Mensajes exportados a: {output}")
 
 
 if __name__ == "__main__":
