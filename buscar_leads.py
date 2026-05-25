@@ -8,6 +8,8 @@ import os
 import csv
 import time
 import json
+import difflib
+import unicodedata
 import argparse
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -52,7 +54,30 @@ COSTS_FILE = "costos.json"
 PRECIO_TEXT_SEARCH   = 0.032   # por llamada a places()
 PRECIO_PLACE_DETAIL  = 0.017   # por llamada a place()
 CREDITO_MENSUAL      = 200.00  # crédito gratis de Google por mes
+
+FUZZY_UMBRAL = 0.88  # similitud mínima para considerar duplicado (0-1)
 # ───────────────────────────────────────────────────────────────────────────
+
+
+# ── FUZZY DEDUP ─────────────────────────────────────────────────────────────
+def _normalizar(texto: str) -> str:
+    """Lowercase + strip accents for fuzzy comparison."""
+    nfkd = unicodedata.normalize("NFKD", texto)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
+
+
+def es_duplicado(nombre: str, nombres_norm: set, umbral: float = FUZZY_UMBRAL) -> bool:
+    """
+    Returns True if `nombre` is already represented in `nombres_norm`.
+    First does an exact check (O(1)), then fuzzy via difflib (O(n)).
+    Catches accent variations: "Peluquería Juan" ≈ "Peluqueria Juan".
+    """
+    norm = _normalizar(nombre)
+    if norm in nombres_norm:
+        return True
+    matches = difflib.get_close_matches(norm, nombres_norm, n=1, cutoff=umbral)
+    return bool(matches)
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 # ── COST TRACKER ────────────────────────────────────────────────────────────
@@ -261,7 +286,9 @@ def parse_args():
     parser.add_argument("--output",   default=OUTPUT_FILE,          help="Archivo CSV de salida (default: leads.csv)")
     parser.add_argument("--paginas",  default=MAX_PAGES_PER_CATEGORIA, type=int, help="Páginas por categoría (default: 3)")
     parser.add_argument("--categorias", nargs="+", default=CATEGORIAS, help="Categorías a buscar")
-    parser.add_argument("--min-resenas", default=MIN_RESENAS, type=int, help="Mínimo de reseñas para incluir un negocio (default: 5)")
+    parser.add_argument("--min-resenas",   default=MIN_RESENAS,   type=int,   help="Mínimo de reseñas para incluir un negocio (default: 5)")
+    parser.add_argument("--fuzzy-umbral",  default=FUZZY_UMBRAL,  type=float, help=f"Similitud mínima para detectar duplicados (default: {FUZZY_UMBRAL})")
+    parser.add_argument("--no-fuzzy",      action="store_true",               help="Desactivar fuzzy matching, usar solo comparación exacta")
     return parser.parse_args()
 
 
@@ -280,7 +307,8 @@ def main():
     vistos  = set()
 
     # Cargar nombres ya guardados para no duplicar entre corridas
-    nombres_existentes = set()
+    umbral = args.fuzzy_umbral if not args.no_fuzzy else 1.01  # >1 disables fuzzy
+    nombres_norm = set()
     if os.path.exists(args.output):
         try:
             wb_exist = openpyxl.load_workbook(args.output)
@@ -291,8 +319,9 @@ def main():
                 for row in ws_exist.iter_rows(min_row=2, values_only=True):
                     val = row[col_idx - 1]
                     if val:
-                        nombres_existentes.add(str(val).strip().lower())
-            print(f"Leads existentes en {args.output}: {len(nombres_existentes)} (se saltarán duplicados)")
+                        nombres_norm.add(_normalizar(str(val)))
+            modo = "exacto" if args.no_fuzzy else f"fuzzy umbral={umbral}"
+            print(f"Leads existentes en {args.output}: {len(nombres_norm)} (dedup {modo})")
         except Exception:
             pass
 
@@ -318,9 +347,9 @@ def main():
             # Sin website = lead potencial
             nombre = detalle.get("name", "")
             resenas = detalle.get("user_ratings_total") or 0
-            if not detalle.get("website") and resenas >= args.min_resenas and nombre.strip().lower() not in nombres_existentes:
+            if not detalle.get("website") and resenas >= args.min_resenas and not es_duplicado(nombre, nombres_norm, umbral):
                 sin_web += 1
-                nombres_existentes.add(nombre.strip().lower())
+                nombres_norm.add(_normalizar(nombre))
                 leads.append({
                     "nombre":     nombre,
                     "telefono":   detalle.get("formatted_phone_number", ""),
