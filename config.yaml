@@ -1,0 +1,44 @@
+ciudad: "Montevideo, Uruguay"
+
+categorias:
+  - peluquería
+  - barbería
+  - taller mecánico
+  - restaurante
+  - panadería
+  - ferretería
+  - veterinaria
+  - gimnasio
+  - lavandería
+  - cerrajería
+  - dentista
+  - kiosco
+  - carnicería
+  - frutería
+  - farmacia
+
+archivos:
+  output: "leads.xlsx"
+  costos: "costos.json"
+  mensajes: "mensajes.txt"
+
+busqueda:
+  delay_entre_requests: 0.2
+  max_paginas_por_categoria: 3
+  min_resenas: 5
+
+api_pricing:
+  text_search_usd: 0.032
+  place_detail_usd: 0.017
+  credito_mensual_usd: 200.00
+
+whatsapp:
+  delay_seg: 25
+  wait_time: 15
+  close_time: 3
+
+mensaje: >-
+  Hola, vi que {nombre} todavía no tiene sitio web.
+  Te puedo armar uno en menos de 14 días, con dominio incluido y sin letra chica.
+  Antes de cualquier pago te mando una maqueta gratis para que veas cómo quedaría.
+  ¿Te interesa? — Santiago | santiagososa.dev

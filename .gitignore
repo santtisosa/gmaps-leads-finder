@@ -7,3 +7,5 @@ leads.csv
 costos.json
 mensajes.txt
 .DS_Store
+leads_bot.log
+*.log
