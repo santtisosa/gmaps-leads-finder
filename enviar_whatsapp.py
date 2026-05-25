@@ -20,15 +20,18 @@ import os
 import openpyxl
 import pywhatkit as kit
 from dotenv import load_dotenv
+from log_config import setup_logging
 
 load_dotenv()
 
+log = setup_logging("enviar_whatsapp")
+
 # ── CONFIG ──────────────────────────────────────────────────────────────────
 CSV_FILE   = "leads.xlsx"
-DELAY_SEG  = 25     # segundos entre mensajes (no spamear)
-LIMITE     = None   # None = todos, o un número para probar (ej: 5)
-WAIT_TIME  = 15     # segundos que espera antes de enviar (para que cargue WA Web)
-CLOSE_TIME = 3      # segundos antes de cerrar la pestaña
+DELAY_SEG  = 25
+LIMITE     = None
+WAIT_TIME  = 15
+CLOSE_TIME = 3
 # ────────────────────────────────────────────────────────────────────────────
 
 MENSAJE_TEMPLATE = (
@@ -44,23 +47,22 @@ def limpiar_numero(telefono):
     Convierte un teléfono a formato internacional sin + ni espacios.
     Asume Uruguay (+598) si no tiene código de país.
     """
-    # Quitar todo excepto dígitos y +
     digits = re.sub(r"[^\d+]", "", telefono)
 
     if digits.startswith("+"):
-        return digits   # ya tiene código de país
+        return digits
     elif digits.startswith("598"):
         return "+" + digits
     elif len(digits) >= 8:
-        return "+598" + digits.lstrip("0")  # agrega Uruguay
+        return "+598" + digits.lstrip("0")
     return None
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Envía mensajes WA a leads del CSV")
-    parser.add_argument("--csv",    default=CSV_FILE, help=f"Archivo CSV (default: {CSV_FILE})")
+    parser.add_argument("--csv",    default=CSV_FILE,  help=f"Archivo CSV (default: {CSV_FILE})")
     parser.add_argument("--delay",  default=DELAY_SEG, type=int, help=f"Segundos entre mensajes (default: {DELAY_SEG})")
-    parser.add_argument("--limite", default=LIMITE, type=int, help="Máximo de mensajes a enviar (default: todos)")
+    parser.add_argument("--limite", default=LIMITE,    type=int, help="Máximo de mensajes a enviar (default: todos)")
     parser.add_argument("--dry-run", action="store_true", help="Muestra qué haría pero no envía nada")
     return parser.parse_args()
 
@@ -77,7 +79,6 @@ def cargar_leads(xlsx_path):
             continue
         if not data.get("teléfono", "") and not data.get("telefono", ""):
             continue
-        # normalizar clave telefono
         data["telefono"] = data.get("teléfono") or data.get("telefono") or ""
         data["nombre"]   = data.get("nombre", "")
         leads.append(data)
@@ -101,38 +102,41 @@ def marcar_contactado(xlsx_path, nombre):
             row[contactado_col - 1].value = "✓"
             break
     wb.save(xlsx_path)
+    log.debug(f"Marcado contactado: {nombre}")
 
 
 def main():
     args = parse_args()
 
+    log.info(f"Iniciando envío de mensajes — archivo: {args.csv}")
+
     if not os.path.exists(args.csv):
-        print(f"ERROR: No se encontró {args.csv}. Corré primero buscar_leads.py")
+        log.error(f"No se encontró {args.csv}. Corré primero buscar_leads.py")
         return
 
     leads = cargar_leads(args.csv)
-    print(f"Leads sin contactar: {len(leads)}")
+    log.info(f"Leads sin contactar: {len(leads)}")
 
     if not leads:
-        print("No hay leads pendientes.")
+        log.info("No hay leads pendientes.")
         return
 
     if args.limite:
         leads = leads[:args.limite]
-        print(f"Límite: {args.limite} mensajes")
+        log.info(f"Límite: {args.limite} mensajes")
 
     if args.dry_run:
-        print("\n[DRY RUN — no se envía nada]\n")
+        log.info("\n[DRY RUN — no se envía nada]\n")
         for lead in leads:
             numero = limpiar_numero(lead["telefono"])
             mensaje = MENSAJE_TEMPLATE.format(nombre=lead["nombre"])
-            print(f"  → {lead['nombre']}")
-            print(f"     Tel: {numero}")
-            print(f"     Msg: {mensaje[:80]}...")
-            print()
+            log.info(f"  → {lead['nombre']}")
+            log.info(f"     Tel: {numero}")
+            log.info(f"     Msg: {mensaje[:80]}...")
+            log.info("")
         return
 
-    print("\n⚠  Asegurate de tener WhatsApp Web abierto y logueado en Chrome.")
+    log.info("\n⚠  Asegurate de tener WhatsApp Web abierto y logueado en Chrome.")
     input("   Presioná ENTER cuando estés listo...\n")
 
     enviados = 0
@@ -144,11 +148,11 @@ def main():
         mensaje = MENSAJE_TEMPLATE.format(nombre=nombre)
 
         if not numero:
-            print(f"[{i}] ⚠  {nombre} — número inválido: {lead['telefono']}")
+            log.warning(f"[{i}] {nombre} — número inválido: {lead['telefono']}")
             errores += 1
             continue
 
-        print(f"[{i}/{len(leads)}] Enviando a {nombre} ({numero})...")
+        log.info(f"[{i}/{len(leads)}] Enviando a {nombre} ({numero})...")
 
         try:
             kit.sendwhatmsg_instantly(
@@ -160,21 +164,22 @@ def main():
             )
             marcar_contactado(args.csv, nombre)
             enviados += 1
-            print(f"  ✓ Enviado")
+            log.info(f"  ✓ Enviado")
+            log.debug(f"  Mensaje enviado a {nombre} ({numero})")
 
         except Exception as e:
-            print(f"  ✗ Error: {e}")
+            log.error(f"  ✗ Error enviando a {nombre}: {e}")
             errores += 1
 
         if i < len(leads):
-            print(f"  Esperando {args.delay}s...")
+            log.info(f"  Esperando {args.delay}s...")
             time.sleep(args.delay)
 
-    print(f"\n{'='*50}")
-    print(f"Enviados:  {enviados}")
-    print(f"Errores:   {errores}")
-    print(f"CSV actualizado: columna 'contactado' marcada con ✓")
-    print(f"{'='*50}")
+    log.info(f"\n{'='*50}")
+    log.info(f"Enviados:  {enviados}")
+    log.info(f"Errores:   {errores}")
+    log.info(f"CSV actualizado: columna 'contactado' marcada con ✓")
+    log.info(f"{'='*50}")
 
 
 if __name__ == "__main__":
