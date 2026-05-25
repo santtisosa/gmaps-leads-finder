@@ -1,22 +1,22 @@
 """
 enviar_whatsapp.py
-Envía mensajes de WhatsApp personalizados a cada lead en leads.csv.
+Envía mensajes de WhatsApp personalizados a cada lead en leads.xlsx.
 
 Requisitos:
   - Chrome/Chromium instalado
   - WhatsApp Web abierto y logueado en el navegador por defecto
-  - leads.csv generado por buscar_leads.py
+  - leads.xlsx generado por buscar_leads.py
 
 Uso:
   venv/bin/python enviar_whatsapp.py
-  venv/bin/python enviar_whatsapp.py --csv leads.csv --delay 30 --limite 20
+  venv/bin/python enviar_whatsapp.py --csv leads.xlsx --delay 30 --limite 20
 """
 
-import csv
 import time
 import argparse
 import re
 import os
+import yaml
 import openpyxl
 import pywhatkit as kit
 from dotenv import load_dotenv
@@ -24,19 +24,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── CONFIG ──────────────────────────────────────────────────────────────────
-CSV_FILE   = "leads.xlsx"
-DELAY_SEG  = 25     # segundos entre mensajes (no spamear)
-LIMITE     = None   # None = todos, o un número para probar (ej: 5)
-WAIT_TIME  = 15     # segundos que espera antes de enviar (para que cargue WA Web)
-CLOSE_TIME = 3      # segundos antes de cerrar la pestaña
-# ────────────────────────────────────────────────────────────────────────────
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
 
-MENSAJE_TEMPLATE = (
-    "Hola, vi que {nombre} todavía no tiene sitio web. "
-    "Te puedo armar uno en menos de 14 días, con dominio incluido y sin letra chica. "
-    "Antes de cualquier pago te mando una maqueta gratis para que veas cómo quedaría. "
-    "¿Te interesa? — Santiago | santiagososa.dev"
-)
+def _load_config(path=_CONFIG_PATH):
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+CFG = _load_config()
+
+CSV_FILE         = CFG["archivos"]["output"]
+DELAY_SEG        = CFG["whatsapp"]["delay_seg"]
+WAIT_TIME        = CFG["whatsapp"]["wait_time"]
+CLOSE_TIME       = CFG["whatsapp"]["close_time"]
+MENSAJE_TEMPLATE = CFG["mensaje"]
+LIMITE           = None
+# ────────────────────────────────────────────────────────────────────────────
 
 
 def limpiar_numero(telefono):
@@ -44,24 +46,24 @@ def limpiar_numero(telefono):
     Convierte un teléfono a formato internacional sin + ni espacios.
     Asume Uruguay (+598) si no tiene código de país.
     """
-    # Quitar todo excepto dígitos y +
     digits = re.sub(r"[^\d+]", "", telefono)
 
     if digits.startswith("+"):
-        return digits   # ya tiene código de país
+        return digits
     elif digits.startswith("598"):
         return "+" + digits
     elif len(digits) >= 8:
-        return "+598" + digits.lstrip("0")  # agrega Uruguay
+        return "+598" + digits.lstrip("0")
     return None
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Envía mensajes WA a leads del CSV")
-    parser.add_argument("--csv",    default=CSV_FILE, help=f"Archivo CSV (default: {CSV_FILE})")
+    parser = argparse.ArgumentParser(description="Envía mensajes WA a leads del Excel")
+    parser.add_argument("--csv",    default=CSV_FILE,  help=f"Archivo Excel (default: {CSV_FILE})")
     parser.add_argument("--delay",  default=DELAY_SEG, type=int, help=f"Segundos entre mensajes (default: {DELAY_SEG})")
-    parser.add_argument("--limite", default=LIMITE, type=int, help="Máximo de mensajes a enviar (default: todos)")
+    parser.add_argument("--limite", default=LIMITE,    type=int, help="Máximo de mensajes a enviar (default: todos)")
     parser.add_argument("--dry-run", action="store_true", help="Muestra qué haría pero no envía nada")
+    parser.add_argument("--config", default=_CONFIG_PATH, help=f"Ruta al config.yaml (default: {_CONFIG_PATH})")
     return parser.parse_args()
 
 
@@ -77,7 +79,6 @@ def cargar_leads(xlsx_path):
             continue
         if not data.get("teléfono", "") and not data.get("telefono", ""):
             continue
-        # normalizar clave telefono
         data["telefono"] = data.get("teléfono") or data.get("telefono") or ""
         data["nombre"]   = data.get("nombre", "")
         leads.append(data)
@@ -105,6 +106,16 @@ def marcar_contactado(xlsx_path, nombre):
 
 def main():
     args = parse_args()
+
+    # Reload config if a custom path was given
+    if args.config != _CONFIG_PATH:
+        global CFG, CSV_FILE, DELAY_SEG, WAIT_TIME, CLOSE_TIME, MENSAJE_TEMPLATE
+        CFG              = _load_config(args.config)
+        CSV_FILE         = CFG["archivos"]["output"]
+        DELAY_SEG        = CFG["whatsapp"]["delay_seg"]
+        WAIT_TIME        = CFG["whatsapp"]["wait_time"]
+        CLOSE_TIME       = CFG["whatsapp"]["close_time"]
+        MENSAJE_TEMPLATE = CFG["mensaje"]
 
     if not os.path.exists(args.csv):
         print(f"ERROR: No se encontró {args.csv}. Corré primero buscar_leads.py")
@@ -173,7 +184,7 @@ def main():
     print(f"\n{'='*50}")
     print(f"Enviados:  {enviados}")
     print(f"Errores:   {errores}")
-    print(f"CSV actualizado: columna 'contactado' marcada con ✓")
+    print(f"Excel actualizado: columna 'contactado' marcada con ✓")
     print(f"{'='*50}")
 
 

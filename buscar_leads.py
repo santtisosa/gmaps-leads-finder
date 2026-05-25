@@ -1,14 +1,14 @@
 """
 buscar_leads.py
 Busca negocios en Montevideo sin sitio web usando Google Maps Places API.
-Exporta resultados a leads.csv
+Exporta resultados a leads.xlsx
 """
 
 import os
-import csv
 import time
 import json
 import argparse
+import yaml
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -17,41 +17,31 @@ from datetime import datetime
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-load_dotenv()  # carga .env automáticamente si existe
+load_dotenv()
 
 # ── CONFIG ─────────────────────────────────────────────────────────────────
 API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "TU_API_KEY_AQUI")
 
-CIUDAD = "Montevideo, Uruguay"
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
 
-CATEGORIAS = [
-    "peluquería",
-    "barbería",
-    "taller mecánico",
-    "restaurante",
-    "panadería",
-    "ferretería",
-    "veterinaria",
-    "gimnasio",
-    "lavandería",
-    "cerrajería",
-    "dentista",
-    "kiosco",
-    "carnicería",
-    "frutería",
-    "farmacia",
-]
+def _load_config():
+    with open(_CONFIG_PATH, encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
-OUTPUT_FILE = "leads.xlsx"
-DELAY_BETWEEN_REQUESTS = 0.2   # segundos entre llamadas API
-MAX_PAGES_PER_CATEGORIA = 3    # cada página = 20 resultados → max 60 por categoría
-MIN_RESENAS = 5                # mínimo de reseñas para considerar el negocio (filtra negocios fantasma)
-COSTS_FILE = "costos.json"
+CFG = _load_config()
 
-# Precios Google Maps Places API (USD)
-PRECIO_TEXT_SEARCH   = 0.032   # por llamada a places()
-PRECIO_PLACE_DETAIL  = 0.017   # por llamada a place()
-CREDITO_MENSUAL      = 200.00  # crédito gratis de Google por mes
+CIUDAD                   = CFG["ciudad"]
+CATEGORIAS               = CFG["categorias"]
+OUTPUT_FILE              = CFG["archivos"]["output"]
+COSTS_FILE               = CFG["archivos"]["costos"]
+MESSAGES_FILE            = CFG["archivos"]["mensajes"]
+DELAY_BETWEEN_REQUESTS   = CFG["busqueda"]["delay_entre_requests"]
+MAX_PAGES_PER_CATEGORIA  = CFG["busqueda"]["max_paginas_por_categoria"]
+MIN_RESENAS              = CFG["busqueda"]["min_resenas"]
+PRECIO_TEXT_SEARCH       = CFG["api_pricing"]["text_search_usd"]
+PRECIO_PLACE_DETAIL      = CFG["api_pricing"]["place_detail_usd"]
+CREDITO_MENSUAL          = CFG["api_pricing"]["credito_mensual_usd"]
+MENSAJE_TEMPLATE         = CFG["mensaje"]
 # ───────────────────────────────────────────────────────────────────────────
 
 
@@ -68,7 +58,6 @@ class CostTracker:
         if os.path.exists(self.path):
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
-            # Resetear si cambió el mes
             if data.get("mes") != self.mes_actual:
                 print(f"  Nuevo mes ({self.mes_actual}). Reseteando contador mensual.")
                 return self._nuevo_mes()
@@ -156,7 +145,7 @@ def buscar_categoria(gmaps, categoria, tracker, ciudad=CIUDAD, max_paginas=MAX_P
         if not next_token:
             break
 
-        time.sleep(2)  # Google requiere ~2s antes de usar next_page_token
+        time.sleep(2)
         try:
             resp = gmaps.places(query=query, page_token=next_token)
             tracker.registrar_text_search()
@@ -200,7 +189,6 @@ def exportar_excel(leads, path):
     KEYS    = ["nombre", "telefono", "direccion", "categoria",
                "rating", "reseñas", "contactado", "notas"]
 
-    # Cargar workbook existente o crear uno nuevo
     if os.path.exists(path):
         wb = openpyxl.load_workbook(path)
         ws = wb.active
@@ -209,7 +197,6 @@ def exportar_excel(leads, path):
         ws = wb.active
         ws.title = "Leads"
 
-        # ── Encabezados ──────────────────────────────────────────────────
         header_fill   = PatternFill("solid", fgColor="1400FF")
         header_font   = Font(bold=True, color="FFFFFF", size=11)
         header_align  = Alignment(horizontal="center", vertical="center")
@@ -227,7 +214,6 @@ def exportar_excel(leads, path):
 
         ws.row_dimensions[1].height = 28
 
-    # ── Filas de datos ───────────────────────────────────────────────────
     row_fill_alt  = PatternFill("solid", fgColor="F5F5F5")
     data_font     = Font(size=10)
     data_align    = Alignment(vertical="center", wrap_text=False)
@@ -244,29 +230,47 @@ def exportar_excel(leads, path):
             cell.fill      = fill
         ws.row_dimensions[r].height = 20
 
-    # ── Anchos de columna ────────────────────────────────────────────────
     col_widths = [35, 18, 50, 18, 8, 10, 14, 30]
     for col, width in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(col)].width = width
 
-    # Freeze header row
     ws.freeze_panes = "A2"
-
     wb.save(path)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Busca negocios sin web en Google Maps")
-    parser.add_argument("--ciudad",   default=CIUDAD,              help="Ciudad a buscar (default: Montevideo, Uruguay)")
-    parser.add_argument("--output",   default=OUTPUT_FILE,          help="Archivo CSV de salida (default: leads.csv)")
-    parser.add_argument("--paginas",  default=MAX_PAGES_PER_CATEGORIA, type=int, help="Páginas por categoría (default: 3)")
-    parser.add_argument("--categorias", nargs="+", default=CATEGORIAS, help="Categorías a buscar")
-    parser.add_argument("--min-resenas", default=MIN_RESENAS, type=int, help="Mínimo de reseñas para incluir un negocio (default: 5)")
+    parser.add_argument("--ciudad",       default=CIUDAD,                   help=f"Ciudad a buscar (default: {CIUDAD})")
+    parser.add_argument("--output",       default=OUTPUT_FILE,              help=f"Archivo de salida (default: {OUTPUT_FILE})")
+    parser.add_argument("--paginas",      default=MAX_PAGES_PER_CATEGORIA,  type=int, help=f"Páginas por categoría (default: {MAX_PAGES_PER_CATEGORIA})")
+    parser.add_argument("--categorias",   nargs="+", default=CATEGORIAS,    help="Categorías a buscar")
+    parser.add_argument("--min-resenas",  default=MIN_RESENAS,              type=int, help=f"Mínimo de reseñas (default: {MIN_RESENAS})")
+    parser.add_argument("--config",       default=_CONFIG_PATH,             help=f"Ruta al config.yaml (default: {_CONFIG_PATH})")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+
+    # Reload config if a custom path was given
+    if args.config != _CONFIG_PATH:
+        global CFG, CIUDAD, CATEGORIAS, OUTPUT_FILE, COSTS_FILE, MESSAGES_FILE
+        global DELAY_BETWEEN_REQUESTS, MAX_PAGES_PER_CATEGORIA, MIN_RESENAS
+        global PRECIO_TEXT_SEARCH, PRECIO_PLACE_DETAIL, CREDITO_MENSUAL, MENSAJE_TEMPLATE
+        with open(args.config, encoding="utf-8") as f:
+            CFG = yaml.safe_load(f)
+        CIUDAD                  = CFG["ciudad"]
+        CATEGORIAS              = CFG["categorias"]
+        OUTPUT_FILE             = CFG["archivos"]["output"]
+        COSTS_FILE              = CFG["archivos"]["costos"]
+        MESSAGES_FILE           = CFG["archivos"]["mensajes"]
+        DELAY_BETWEEN_REQUESTS  = CFG["busqueda"]["delay_entre_requests"]
+        MAX_PAGES_PER_CATEGORIA = CFG["busqueda"]["max_paginas_por_categoria"]
+        MIN_RESENAS             = CFG["busqueda"]["min_resenas"]
+        PRECIO_TEXT_SEARCH      = CFG["api_pricing"]["text_search_usd"]
+        PRECIO_PLACE_DETAIL     = CFG["api_pricing"]["place_detail_usd"]
+        CREDITO_MENSUAL         = CFG["api_pricing"]["credito_mensual_usd"]
+        MENSAJE_TEMPLATE        = CFG["mensaje"]
 
     if API_KEY == "TU_API_KEY_AQUI":
         print("ERROR: Configurá tu API key.")
@@ -279,7 +283,6 @@ def main():
     leads   = []
     vistos  = set()
 
-    # Cargar nombres ya guardados para no duplicar entre corridas
     nombres_existentes = set()
     if os.path.exists(args.output):
         try:
@@ -315,7 +318,6 @@ def main():
             if not detalle:
                 continue
 
-            # Sin website = lead potencial
             nombre = detalle.get("name", "")
             resenas = detalle.get("user_ratings_total") or 0
             if not detalle.get("website") and resenas >= args.min_resenas and nombre.strip().lower() not in nombres_existentes:
@@ -335,7 +337,6 @@ def main():
 
         print(f"  Sin web: {sin_web}")
 
-    # ── EXPORTAR EXCEL ──────────────────────────────────────────────────────
     if not leads:
         print("\nNo se encontraron leads.")
         return
@@ -357,17 +358,10 @@ def main():
 def generar_mensaje(lead):
     """Genera un mensaje de WhatsApp personalizado para un lead."""
     nombre   = lead["nombre"]
-    categoria = lead["categoria"]
-    telefono  = lead["telefono"]
+    telefono = lead["telefono"]
 
-    mensaje = (
-        f"Hola, vi que {nombre} todavía no tiene sitio web. "
-        f"Te puedo armar uno en menos de 14 días, con dominio incluido y sin letra chica. "
-        f"Antes de cualquier pago te mando una maqueta gratis para que veas cómo quedaría. "
-        f"¿Te interesa? — Santiago | santiagososa.dev"
-    )
+    mensaje = MENSAJE_TEMPLATE.format(nombre=nombre)
 
-    # Link de WhatsApp listo para abrir (si hay teléfono)
     numero_limpio = "".join(c for c in telefono if c.isdigit())
     if numero_limpio:
         from urllib.parse import quote
@@ -378,8 +372,10 @@ def generar_mensaje(lead):
     return mensaje, link
 
 
-def exportar_mensajes(leads, output="mensajes.txt"):
+def exportar_mensajes(leads, output=None):
     """Exporta mensajes personalizados por cada lead a un archivo de texto."""
+    if output is None:
+        output = MESSAGES_FILE
     with open(output, "w", encoding="utf-8") as f:
         for i, lead in enumerate(leads, 1):
             mensaje, link = generar_mensaje(lead)
